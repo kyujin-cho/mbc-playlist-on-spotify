@@ -1,0 +1,19 @@
+# Required: Target radio program ID, from iMBC site
+targetRadioStation: RAMFMxxx
+# Optional: Human-readable program name. If not specified, this value will be substituted to program ID described above.
+stationName: 라디오
+# Optional: Maximum number of playlists to import at once. Default value is 10
+maxBulkImportSize: 10
+# Optional: Port number for OAuth redirect handler server. This value should be equal with redirect URL's port on spotify. Default value is 31208
+OAuthHandlerPort: 31208
+spotify:
+  # Required: Spotify App Client ID
+  clientId: ''
+  # Required: Spotify App Client Secret
+  clientSecret: ''
+# Optional: Declare these values only if you want to be notified by Telegram when playlist is created on Spotify
+telegram:
+  # Required: Telegram Bot Token
+  botToken: ''
+  # Required: Target channel to announce
+  channel: ''
