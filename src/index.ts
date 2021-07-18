@@ -131,8 +131,8 @@ const main = async () => {
   }
 
   const spotify = new Spotify({
-    clientId: process.env.CLIENT_ID,
-    clientSecret: process.env.CLIENT_SECRET,
+    clientId: config.spotify.clientId,
+    clientSecret: config.spotify.clientSecret,
     redirectUri: `http://localhost:${config.OAuthHandlerPort}/callback`,
   })
 
