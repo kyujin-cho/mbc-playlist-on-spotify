@@ -13,7 +13,7 @@ jobs:
         run: echo package_version=$(cat package.json| jq -r .version) >> $GITHUB_ENV
       - name: Check if target version has been already published
         run: |
-          echo current_version_json=$(curl https://api.github.com/users/kyujin-cho/packages/npm/websocket-tunnel/versions \
+          echo current_version_json=$(curl https://api.github.com/users/kyujin-cho/packages/npm/mbc-playlist-on-spotify/versions \
             -H "Authorization: token ${{ secrets.PACKAGE_SECRET }}" | \
             jq -c ".[] | select( .name == \"${{ env.package_version }}\" )") >> $GITHUB_ENV
       - name: Store output
@@ -70,7 +70,7 @@ jobs:
           yarn tsc
       - name: Determine Docker image name
         run: |
-          echo image_name=ghcr.io/kyujin-cho/websocket-tunnel >> $GITHUB_ENV
+          echo image_name=ghcr.io/kyujin-cho/mbc-playlist-on-spotify >> $GITHUB_ENV
       - name: Build Docker image
         run: docker build -t ${{ env.image_name }}:${{ needs.generate_output.outputs.package_version }} -t ${{ env.image_name }}:latest .
       - name: Publish image
