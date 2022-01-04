@@ -261,6 +261,7 @@ const main = async () => {
 
   for (const { name, tracks } of playlists) {
     const spotifyTracks: SpotifyApi.TrackObjectFull[] = []
+    const includedTracks: ITrack[] = []
     const failedTracks: ITrack[] = []
 
     for (const track of tracks) {
@@ -274,6 +275,7 @@ const main = async () => {
       ) {
         const spotifyTrack = spotifySearch.body.tracks.items[0]
         console.log(`${track.name} - ${track.artist} => ${spotifyTrack.uri}`)
+        includedTracks.push(track)
         spotifyTracks.push(spotifyTrack)
       } else {
         console.error(`${track.name} - ${track.artist} => not found`)
@@ -306,6 +308,12 @@ const main = async () => {
 
     if (bot && config.telegram) {
       let message = `New playlist [${spotifyPlaylist.body.name}](${spotifyPlaylist.body.external_urls.spotify}) added to Spotify.`
+      if (includedTracks.length > 0) {
+        message += '\nIncluded tracks: \n'
+        includedTracks.forEach(
+          (item) => (message += `- ${item.artist}: ${item.name}\n`)
+        )
+      }
       if (failedTracks.length > 0) {
         message += '\nFailed tracks: \n'
         failedTracks.forEach(
