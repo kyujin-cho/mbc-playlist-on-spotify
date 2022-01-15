@@ -8,8 +8,6 @@ import Spotify from 'spotify-web-api-node'
 import { Telegraf } from 'telegraf'
 import HTMLUnescape from 'unescape'
 
-const LIST_URL = 'https://miniweb.imbc.com/Music?page=1&progCode={}'
-const GET_URL = 'https://miniweb.imbc.com/Music/View?progCode={}&seqID={}'
 const SEQ_ID_REGEX = /seqID=([0-9]+)/
 
 const CONFIG_PATH = process.env.CONFIG_PATH || './config.yml'
@@ -79,14 +77,113 @@ interface IConfig {
   }
 }
 
-interface IPlaylist {
-  name: string
-  tracks: ITrack[]
-}
-
 interface ITrack {
   name: string
   artist: string
+}
+
+type Optional<T> = T | undefined
+
+const createPlaylist = async (
+  config: IConfig, targetId: number,
+  bot: Optional<Telegraf>, spotify: Spotify,
+) => {
+  const getUrl = `https://miniweb.imbc.com/Music/View?progCode=${config.targetRadioStation}&seqID=${targetId}`
+  console.log('Querying', getUrl)
+  const response = await Fetch(getUrl)
+  const $ = cheerio.load(await response.text())
+  const title = $('div.view-title p.title').eq(0).text().trim()
+  const tracks = $('table.list-type tbody tr')
+    .toArray()
+    .map((item) => {
+      const $ = cheerio.load(item)
+      const title = $('td').eq(1).text().trim()
+      let name = ''
+      for (let i = 0; i < title.length; i++) {
+        if (title[i] === '(') {
+          let level = 1
+          let j = i
+          for (; j < title.length; j++) {
+            if (title[j] === '(') level++
+            if (title[j] === ')') level--
+            if (level === 0) {
+              break
+            }
+          }
+          i = j
+        } else {
+          name += title[i]
+        }
+      }
+
+      const artist = $('td').eq(2).text().trim()
+      return { name: HTMLUnescape(name), artist: HTMLUnescape(artist) }
+    })
+    const spotifyTracks: SpotifyApi.TrackObjectFull[] = []
+    const includedTracks: ITrack[] = []
+    const failedTracks: ITrack[] = []
+
+    for (const track of tracks) {
+      const spotifySearch = await spotify.searchTracks(
+        `${track.name} ${track.artist}`,
+        { limit: 1 }
+      )
+      if (
+        spotifySearch.body.tracks?.items &&
+        spotifySearch.body.tracks.items[0]
+      ) {
+        const spotifyTrack = spotifySearch.body.tracks.items[0]
+        console.log(`${track.name} - ${track.artist} => ${spotifyTrack.uri}`)
+        includedTracks.push(track)
+        spotifyTracks.push(spotifyTrack)
+      } else {
+        console.error(`${track.name} - ${track.artist} => not found`)
+        failedTracks.push(track)
+      }
+    }
+
+    if (spotifyTracks.length === 0) {
+      console.log(`${title} => Skipping empty playlist`)
+      return
+    }
+
+    const spotifyPlaylist = await spotify.createPlaylist(
+      `${config.stationName} - ${title}`,
+      {
+        public: false,
+      }
+    )
+
+    console.log(
+      `${title} => Created playlist ${config.stationName} - ${title} (${spotifyPlaylist.body.uri}), URL ${spotifyPlaylist.body.external_urls.spotify}`
+    )
+
+    await spotify.addTracksToPlaylist(
+      spotifyPlaylist.body.id,
+      spotifyTracks.map((item) => item.uri)
+    )
+
+    console.log(`${title} => added ${spotifyTracks.length} tracks to playlist`)
+
+    if (bot && config.telegram) {
+      let message = `New playlist [${spotifyPlaylist.body.name}](${spotifyPlaylist.body.external_urls.spotify}) added to Spotify.`
+      if (includedTracks.length > 0) {
+        message += '\nIncluded tracks: \n'
+        includedTracks.forEach(
+          (item) => (message += `- ${item.artist}: ${item.name}\n`)
+        )
+      }
+      if (failedTracks.length > 0) {
+        message += '\nFailed tracks: \n'
+        failedTracks.forEach(
+          (item) => (message += `- ${item.artist}: ${item.name}\n`)
+        )
+      }
+      await bot.telegram.sendMessage(config.telegram?.channel, message, {
+        // eslint-disable-next-line camelcase
+        parse_mode: 'Markdown',
+      })
+    }
 }
 
 /**
@@ -123,7 +220,6 @@ const main = async () => {
   } catch (e) {
     console.error('No config file provided')
     process.exit(1)
-    return
   }
 
   if (config.telegram) {
@@ -164,13 +260,9 @@ const main = async () => {
   console.log('Connected to Spotify')
   await saveConfig(config)
 
-  console.log(
-    'Checking for new playlists at: ',
-    LIST_URL.replace('{}', config.targetRadioStation)
-  )
-  const programsResponse = await Axios.get(
-    LIST_URL.replace('{}', config.targetRadioStation)
-  )
+  const listUrl = `https://miniweb.imbc.com/Music?page=1&progCode=${config.targetRadioStation}`
+  console.log('Checking for new playlists at: ', listUrl)
+  const programsResponse = await Axios.get(listUrl)
   const HTML = programsResponse.data
   const $ = cheerio.load(HTML)
   const rows = $('table.list-type tbody tr')
@@ -203,127 +295,12 @@ const main = async () => {
     config.lastVisited = targetIDs[0]
   }
 
-  const playlists: IPlaylist[] = []
-
   for (const targetID of targetIDs) {
     await sleep(1)
-    console.log(
-      'Querying',
-      GET_URL.replace('{}', config.targetRadioStation).replace(
-        '{}',
-        targetID.toString()
-      )
-    )
-    const response = await Fetch(
-      GET_URL.replace('{}', config.targetRadioStation).replace(
-        '{}',
-        targetID.toString()
-      )
-    )
-    const $ = cheerio.load(await response.text())
-    const title = $('div.view-title p.title').eq(0).text().trim()
-    const tracks = $('table.list-type tbody tr')
-      .toArray()
-      .map((item) => {
-        const $ = cheerio.load(item)
-        const title = $('td').eq(1).text().trim()
-        let name = ''
-        for (let i = 0; i < title.length; i++) {
-          if (title[i] === '(') {
-            let level = 1
-            let j = i
-            for (; j < title.length; j++) {
-              if (title[j] === '(') level++
-              if (title[j] === ')') level--
-              if (level === 0) {
-                break
-              }
-            }
-            i = j
-            // const braceElement = title.substring(i, j + 1)
-            // if (
-            //   FILTERED_WORDS.filter((word) => braceElement.indexOf(word) > -1)
-            //     .length === 0
-            // ) {
-            //   name += braceElement
-            // }
-          } else {
-            name += title[i]
-          }
-        }
-
-        const artist = $('td').eq(2).text().trim()
-        return { name: HTMLUnescape(name), artist: HTMLUnescape(artist) }
-      })
-
-    playlists.push({ name: title, tracks })
-  }
-
-  for (const { name, tracks } of playlists) {
-    const spotifyTracks: SpotifyApi.TrackObjectFull[] = []
-    const includedTracks: ITrack[] = []
-    const failedTracks: ITrack[] = []
-
-    for (const track of tracks) {
-      const spotifySearch = await spotify.searchTracks(
-        `${track.name} ${track.artist}`,
-        { limit: 1 }
-      )
-      if (
-        spotifySearch.body.tracks?.items &&
-        spotifySearch.body.tracks.items[0]
-      ) {
-        const spotifyTrack = spotifySearch.body.tracks.items[0]
-        console.log(`${track.name} - ${track.artist} => ${spotifyTrack.uri}`)
-        includedTracks.push(track)
-        spotifyTracks.push(spotifyTrack)
-      } else {
-        console.error(`${track.name} - ${track.artist} => not found`)
-        failedTracks.push(track)
-      }
-    }
-
-    if (spotifyTracks.length === 0) {
-      console.log(`${name} => Skipping empty playlist`)
-      continue
-    }
-
-    const spotifyPlaylist = await spotify.createPlaylist(
-      `${config.stationName} - ${name}`,
-      {
-        public: false,
-      }
-    )
-
-    console.log(
-      `${name} => Created playlist ${config.stationName} - ${name} (${spotifyPlaylist.body.uri}), URL ${spotifyPlaylist.body.external_urls.spotify}`
-    )
-
-    await spotify.addTracksToPlaylist(
-      spotifyPlaylist.body.id,
-      spotifyTracks.map((item) => item.uri)
-    )
-
-    console.log(`${name} => added ${spotifyTracks.length} tracks to playlist`)
-
-    if (bot && config.telegram) {
-      let message = `New playlist [${spotifyPlaylist.body.name}](${spotifyPlaylist.body.external_urls.spotify}) added to Spotify.`
-      if (includedTracks.length > 0) {
-        message += '\nIncluded tracks: \n'
-        includedTracks.forEach(
-          (item) => (message += `- ${item.artist}: ${item.name}\n`)
-        )
-      }
-      if (failedTracks.length > 0) {
-        message += '\nFailed tracks: \n'
-        failedTracks.forEach(
-          (item) => (message += `- ${item.artist}: ${item.name}\n`)
-        )
-      }
-      await bot.telegram.sendMessage(config.telegram?.channel, message, {
-        // eslint-disable-next-line camelcase
-        parse_mode: 'Markdown',
-      })
+    try{
+      await createPlaylist(config, targetID, bot, spotify)
+    } catch (e) {
+      console.error(e)
     }
   }
 
