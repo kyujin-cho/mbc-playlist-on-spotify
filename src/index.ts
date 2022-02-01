@@ -13,8 +13,9 @@ const SEQ_ID_REGEX = /seqID=([0-9]+)/
 const CONFIG_PATH = process.env.CONFIG_PATH || './config.yml'
 
 const SKIPPED_TRACKS = [
-  ['Vienna Symphonic Orchestra Project', 'Satisfaction'],
-  ['Acoustic Alchemy', 'Ballad For Kay'],
+  'Vienna Symphonic Orchestra Project:Satisfaction',
+  'Various Artists:Satisfaction',
+  'Acoustic Alchemy:Ballad For Kay',
 ]
 /**
  * Waits for OAuth login response
@@ -131,7 +132,7 @@ const createPlaylist = async (
   const trackResults: ITrack[] = []
 
   for (const track of tracks) {
-    if (SKIPPED_TRACKS.indexOf([track.artist, track.name]) !== -1) continue
+    if (SKIPPED_TRACKS.indexOf(`${track.artist}:${track.name}`) !== -1) continue
     const spotifySearch = await spotify.searchTracks(
       `${track.name} ${track.artist}`,
       { limit: 1 }
