@@ -12,6 +12,10 @@ const SEQ_ID_REGEX = /seqID=([0-9]+)/
 
 const CONFIG_PATH = process.env.CONFIG_PATH || './config.yml'
 
+const SKIPPED_TRACKS = [
+  ['Vienna Symphonic Orchestra Project', 'Satisfaction'],
+  ['Acoustic Alchemy', 'Ballad For Kay'],
+]
 /**
  * Waits for OAuth login response
  *
@@ -80,13 +84,16 @@ interface IConfig {
 interface ITrack {
   name: string
   artist: string
+  spotifyTrack?: SpotifyApi.TrackObjectFull
 }
 
 type Optional<T> = T | undefined
 
 const createPlaylist = async (
-  config: IConfig, targetId: number,
-  bot: Optional<Telegraf>, spotify: Spotify,
+  config: IConfig,
+  targetId: number,
+  bot: Optional<Telegraf>,
+  spotify: Spotify
 ) => {
   const getUrl = `https://miniweb.imbc.com/Music/View?progCode=${config.targetRadioStation}&seqID=${targetId}`
   console.log('Querying', getUrl)
@@ -119,71 +126,73 @@ const createPlaylist = async (
       const artist = $('td').eq(2).text().trim()
       return { name: HTMLUnescape(name), artist: HTMLUnescape(artist) }
     })
-    const spotifyTracks: SpotifyApi.TrackObjectFull[] = []
-    const includedTracks: ITrack[] = []
-    const failedTracks: ITrack[] = []
 
-    for (const track of tracks) {
-      const spotifySearch = await spotify.searchTracks(
-        `${track.name} ${track.artist}`,
-        { limit: 1 }
-      )
-      if (
-        spotifySearch.body.tracks?.items &&
-        spotifySearch.body.tracks.items[0]
-      ) {
-        const spotifyTrack = spotifySearch.body.tracks.items[0]
-        console.log(`${track.name} - ${track.artist} => ${spotifyTrack.uri}`)
-        includedTracks.push(track)
-        spotifyTracks.push(spotifyTrack)
+  const spotifyTracks: SpotifyApi.TrackObjectFull[] = []
+  const trackResults: ITrack[] = []
+
+  for (const track of tracks) {
+    if (SKIPPED_TRACKS.indexOf([track.artist, track.name]) !== -1) continue
+    const spotifySearch = await spotify.searchTracks(
+      `${track.name} ${track.artist}`,
+      { limit: 1 }
+    )
+    if (
+      spotifySearch.body.tracks?.items &&
+      spotifySearch.body.tracks.items[0]
+    ) {
+      const spotifyTrack = spotifySearch.body.tracks.items[0]
+      console.log(`${track.name} - ${track.artist} => ${spotifyTrack.uri}`)
+      trackResults.push({ ...track, spotifyTrack })
+      spotifyTracks.push(spotifyTrack)
+    } else {
+      console.error(`${track.name} - ${track.artist} => not found`)
+      trackResults.push(track)
+    }
+  }
+
+  if (spotifyTracks.length === 0) {
+    console.log(`${title} => Skipping empty playlist`)
+    return
+  }
+
+  const spotifyPlaylist = await spotify.createPlaylist(
+    `${config.stationName} - ${title}`,
+    {
+      public: false,
+    }
+  )
+
+  await spotify.changePlaylistDetails(spotifyPlaylist.body.id, {
+    public: false,
+  })
+  console.log(
+    `${title} => Created playlist ${config.stationName} - ${title} (${spotifyPlaylist.body.uri}), URL ${spotifyPlaylist.body.external_urls.spotify}`
+  )
+
+  await spotify.addTracksToPlaylist(
+    spotifyPlaylist.body.id,
+    spotifyTracks.map(({ uri }) => uri)
+  )
+
+  console.log(`${title} => added ${spotifyTracks.length} tracks to playlist`)
+
+  if (bot && config.telegram) {
+    let message = `New playlist [${spotifyPlaylist.body.name}](${spotifyPlaylist.body.external_urls.spotify}) added to Spotify.\n`
+
+    for (const { artist, name, spotifyTrack } of trackResults) {
+      message += `- ${artist}: ${name} => `
+      if (spotifyTrack) {
+        message += `${spotifyTrack.artists.join(', ')}: ${spotifyTrack.name}\n`
       } else {
-        console.error(`${track.name} - ${track.artist} => not found`)
-        failedTracks.push(track)
+        message += '[Not found on Spotify]\n'
       }
     }
 
-    if (spotifyTracks.length === 0) {
-      console.log(`${title} => Skipping empty playlist`)
-      return
-    }
-
-    const spotifyPlaylist = await spotify.createPlaylist(
-      `${config.stationName} - ${title}`,
-      {
-        public: false,
-      }
-    )
-
-    console.log(
-      `${title} => Created playlist ${config.stationName} - ${title} (${spotifyPlaylist.body.uri}), URL ${spotifyPlaylist.body.external_urls.spotify}`
-    )
-
-    await spotify.addTracksToPlaylist(
-      spotifyPlaylist.body.id,
-      spotifyTracks.map((item) => item.uri)
-    )
-
-    console.log(`${title} => added ${spotifyTracks.length} tracks to playlist`)
-
-    if (bot && config.telegram) {
-      let message = `New playlist [${spotifyPlaylist.body.name}](${spotifyPlaylist.body.external_urls.spotify}) added to Spotify.`
-      if (includedTracks.length > 0) {
-        message += '\nIncluded tracks: \n'
-        includedTracks.forEach(
-          (item) => (message += `- ${item.artist}: ${item.name}\n`)
-        )
-      }
-      if (failedTracks.length > 0) {
-        message += '\nFailed tracks: \n'
-        failedTracks.forEach(
-          (item) => (message += `- ${item.artist}: ${item.name}\n`)
-        )
-      }
-      await bot.telegram.sendMessage(config.telegram?.channel, message, {
-        // eslint-disable-next-line camelcase
-        parse_mode: 'Markdown',
-      })
-    }
+    await bot.telegram.sendMessage(config.telegram?.channel, message, {
+      // eslint-disable-next-line camelcase
+      parse_mode: 'Markdown',
+    })
+  }
 }
 
 /**
@@ -252,9 +261,11 @@ const main = async () => {
   } else {
     spotify.setRefreshToken(config.spotify.refreshToken)
     const {
-      body: { access_token: accessToken },
+      body: { access_token: accessToken, refresh_token: newRefreshToken },
     } = await spotify.refreshAccessToken()
     spotify.setAccessToken(accessToken)
+    if (newRefreshToken !== undefined)
+      config.spotify.refreshToken = newRefreshToken
   }
 
   console.log('Connected to Spotify')
@@ -297,7 +308,7 @@ const main = async () => {
 
   for (const targetID of targetIDs) {
     await sleep(1)
-    try{
+    try {
       await createPlaylist(config, targetID, bot, spotify)
     } catch (e) {
       console.error(e)
