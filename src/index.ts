@@ -182,7 +182,9 @@ const createPlaylist = async (
     for (const { artist, name, spotifyTrack } of trackResults) {
       message += `- ${artist}: ${name} => `
       if (spotifyTrack) {
-        message += `${spotifyTrack.artists.join(', ')}: ${spotifyTrack.name}\n`
+        message += `${spotifyTrack.artists
+          .map(({ name }) => name)
+          .join(', ')}: ${spotifyTrack.name}\n`
       } else {
         message += '[Not found on Spotify]\n'
       }
